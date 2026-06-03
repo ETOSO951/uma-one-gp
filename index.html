@@ -3,18 +3,46 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>UMA1 GP - </title>
+    <title>UMA1 GP - 投票パネル</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        :root { --turf: #0a2e1a; --gold: #ffd700; --panel: rgba(0,0,0,0.95); --accent: #00ff88; --red: #ff4757; --blue: #54a0ff; }
-        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: var(--turf); color: #fff; margin: 0; padding: 10px; overflow-x: hidden; }
+        :root { 
+            --turf: #0a2e1a; 
+            --gold: #ffd700; 
+            --panel: rgba(0,0,0,0.95); 
+            --accent: #00ff88; 
+            --red: #ff4757; 
+            --blue: #54a0ff; 
+        }
+        /* 感謝祭（サンクスギビング）モード用のテーマカラー定義 */
+        body.thanksgiving {
+            --turf: #4a0e17; /* 深いお祭り赤 */
+            --gold: #fff200; /* 明るいゴールド */
+            --panel: rgba(25, 0, 5, 0.96); /* 感謝祭用の闇夜パネル */
+            --accent: #ff9f43; /* サンクスオレンジ */
+            --blue: #ff6b6b;
+        }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: var(--turf); color: #fff; margin: 0; padding: 10px; overflow-x: hidden; transition: background 0.5s ease; }
         .container { max-width: 600px; margin: auto; }
-        .board { background: var(--panel); border: 2px solid var(--gold); border-radius: 15px; padding: 20px; margin-bottom: 20px; box-shadow: 0 0 15px rgba(0,0,0,0.5); }
+        .board { background: var(--panel); border: 2px solid var(--gold); border-radius: 15px; padding: 20px; margin-bottom: 20px; box-shadow: 0 0 15px rgba(0,0,0,0.5); position: relative; overflow: hidden; }
+        
+        /* 感謝祭バッジ */
+        .tg-badge { display: none; position: absolute; top: 0; right: 15px; background: #ff4757; color: #fff; padding: 4px 10px; font-size: 11px; font-weight: bold; border-radius: 0 0 8px 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); animation: pulse 1.5s infinite; }
+        body.thanksgiving .tg-badge { display: block; }
+
         .btn { background: linear-gradient(180deg, var(--gold) 0%, #b8860b 100%); border: none; padding: 15px; color: #000; font-weight: bold; border-radius: 8px; width: 100%; margin: 10px 0; cursor: pointer; font-size: 16px; }
+        body.thanksgiving .btn { background: linear-gradient(180deg, #ff9f43 0%, #ff4757 100%); color: #fff; }
+        
         .mini-btn { padding: 10px; font-size: 12px; border-radius: 5px; border: none; cursor: pointer; color: #fff; font-weight: bold; margin: 2px; }
         .hidden { display: none !important; }
         input { width: 100%; padding: 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid #444; margin: 5px 0; background: #111; color: #fff; text-align: center; font-size: 16px; }
         #result-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.98); z-index: 10000; display: none; flex-direction: column; align-items: center; justify-content: center; }
+        
+        @keyframes pulse {
+            0% { opacity: 0.8; }
+            50% { opacity: 1; transform: scale(1.05); }
+            100% { opacity: 0.8; }
+        }
     </style>
 </head>
 <body>
@@ -29,6 +57,7 @@
 
 <div class="container">
     <div id="loading-screen" class="board" style="text-align: center;">
+        <div class="tg-badge">🍁 感謝祭開催中 🍁</div>
         <h2 style="color:var(--gold);">UMA1 GP 投票パネル</h2>
         <div id="status-msg" style="margin: 20px 0; color: var(--accent);">通信設定中...</div>
         <div id="manual-form" class="hidden">
@@ -38,6 +67,7 @@
     </div>
 
     <div id="name-input-screen" class="section hidden board" style="text-align: center;">
+        <div class="tg-badge">🍁 感謝祭開催中 🍁</div>
         <h3 style="color:var(--gold);">接続完了！</h3>
         <p>レースで使用するニックネームを入力してください。</p>
         <input type="text" id="guestNameInput" placeholder="ニックネームを入力">
@@ -45,6 +75,7 @@
     </div>
 
     <div id="guest-screen" class="section hidden board">
+        <div class="tg-badge">🍁 感謝祭特別レース 🍁</div>
         <div style="display:flex; justify-content:space-between; margin-bottom:15px; border-bottom:1px solid #333; padding-bottom:10px;">
             <b id="display-name" style="color:var(--gold);">---</b>
             <span>CHIPS: <b id="my-chips" style="color:var(--accent);">1000</b></span>
@@ -63,6 +94,7 @@ let peer = null, connToMonitor = null;
 let currentRace = null, myChips = 1000;
 let tempBets = {}, confirmedBets = {};
 let finalRoomName = "";
+let isThanksgivingMode = false; // 感謝祭状態を保持するフラグ
 
 window.onload = () => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -77,7 +109,6 @@ window.onload = () => {
     }
 };
 
-// サーバー（モニター）へファーストタッチ（マッチング）を試みる
 function connectToMonitor() {
     finalRoomName = document.getElementById('roomName').value.trim();
     if(!finalRoomName) return alert("合言葉が必要です");
@@ -93,7 +124,6 @@ function connectToMonitor() {
         connToMonitor = peer.connect(finalRoomName);
         
         connToMonitor.on('open', () => {
-            // マッチングが成功したら名前入力画面を出す
             document.getElementById('loading-screen').classList.add('hidden');
             document.getElementById('name-input-screen').classList.remove('hidden');
         });
@@ -112,23 +142,29 @@ function connectToMonitor() {
     });
 }
 
-// 名前を決定して、正式にゲームサーバーへ参加通知を送る
 function submitGuestName() {
     const name = document.getElementById('guestNameInput').value.trim();
     if(!name) return alert("名前を入力してください。");
 
-    // 親機へ正式に参加シグナルを送信
     connToMonitor.send({type:'JOIN', name: name, isTemp: true});
 
-    // 画面を投票メインパネルに切り替え
     document.getElementById('name-input-screen').classList.add('hidden');
     document.getElementById('guest-screen').classList.remove('hidden');
     document.getElementById('display-name').innerText = name;
 }
 
 function handleData(d) {
+    // 親機からの「感謝祭フラグ（更新信号）」を受け取る処理
+    if (d.type === 'TG_MODE_SYNC') {
+        toggleThanksgivingVisual(d.enabled);
+    }
+
     if(d.type === 'RACE_SET') {
         currentRace = d.race;
+        // 親機がレースデータを送る際にtgModeを忍ばせていた場合のセーフティ
+        if (d.tgMode !== undefined) {
+            toggleThanksgivingVisual(d.tgMode);
+        }
         tempBets = {}; confirmedBets = {};
         document.getElementById('result-screen').style.display = 'none';
         renderGuestBetting();
@@ -152,9 +188,18 @@ function handleData(d) {
         document.getElementById('res-winner').innerText = d.winner;
         document.getElementById('res-payout-list').innerHTML = d.payouts.map(p => `<div>${p.name}: <span style="color:var(--accent)">+${p.win}</span></div>`).join('');
     }
-    // 運営がリザルト画面を閉じたか、最終ランキングを出したら即時離脱
     if(d.type === 'CLOSE_UI' || d.type === 'SHOW_RANKING') {
         exitGame();
+    }
+}
+
+// 感謝祭モードの見た目を切り替える関数
+function toggleThanksgivingVisual(enable) {
+    isThanksgivingMode = enable;
+    if (enable) {
+        document.body.classList.add('thanksgiving');
+    } else {
+        document.body.classList.remove('thanksgiving');
     }
 }
 
