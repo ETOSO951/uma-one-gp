@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>UMA1 GP - スマートフォン投票</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root { --turf: #0a2e1a; --gold: #ffd700; --panel: rgba(0,0,0,0.95); --accent: #00ff88; --red: #ff4757; --blue: #54a0ff; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: var(--turf); color: #fff; margin: 0; padding: 10px; overflow-x: hidden; }
+        .container { max-width: 600px; margin: auto; }
+        .board { background: var(--panel); border: 2px solid var(--gold); border-radius: 15px; padding: 20px; margin-bottom: 20px; box-shadow: 0 0 15px rgba(0,0,0,0.5); }
+        .btn { background: linear-gradient(180deg, var(--gold) 0%, #b8860b 100%); border: none; padding: 15px; color: #000; font-weight: bold; border-radius: 8px; width: 100%; margin: 10px 0; cursor: pointer; font-size: 16px; }
+        .mini-btn { padding: 10px; font-size: 12px; border-radius: 5px; border: none; cursor: pointer; color: #fff; font-weight: bold; margin: 2px; }
+        .hidden { display: none !important; }
+        input { width: 100%; padding: 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid #444; margin: 5px 0; background: #111; color: #fff; text-align: center; font-size: 16px; }
+        #result-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.98); z-index: 10000; display: none; flex-direction: column; align-items: center; justify-content: center; }
+    </style>
+</head>
+<body>
+
+<div id="result-screen">
+    <div id="res-race-part" style="text-align: center;">
+        <h1 style="color:var(--accent);">RACE RESULT</h1>
+        <div id="res-winner" style="font-size:3em; color:var(--gold);">---</div>
+        <div id="res-payout-list" style="width:300px; margin:20px auto; font-size:1.2em;"></div>
+    </div>
+</div>
+
+<div class="container">
+    <div id="loading-screen" class="board" style="text-align: center;">
+        <h2 style="color:var(--gold);">UMA1 GP 投票パネル</h2>
+        <div id="status-msg" style="margin: 20px 0; color: var(--accent);">通信設定中...</div>
+        <div id="manual-form" class="hidden">
+            <input type="text" id="roomName" placeholder="合言葉を入力してください">
+            <button class="btn" onclick="connectToMonitor()">ゲームを探す</button>
+        </div>
+    </div>
+
+    <div id="name-input-screen" class="section hidden board" style="text-align: center;">
+        <h3 style="color:var(--gold);">接続完了！</h3>
+        <p>レースで使用するニックネームを入力してください。</p>
+        <input type="text" id="guestNameInput" placeholder="ニックネームを入力">
+        <button class="btn" onclick="submitGuestName()">この名前で参加する</button>
+    </div>
+
+    <div id="guest-screen" class="section hidden board">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px; border-bottom:1px solid #333; padding-bottom:10px;">
+            <b id="display-name" style="color:var(--gold);">---</b>
+            <span>CHIPS: <b id="my-chips" style="color:var(--accent);">1000</b></span>
+        </div>
+        <div id="betting-area">（レース抽選待ちです...）</div>
+    </div>
+
+    <div id="exit-screen" class="section hidden board" style="text-align: center;">
+        <h2 style="color:var(--red);">レース終了</h2>
+        <p>ご参加ありがとうございました！<br>このページを閉じて終了してください。</p>
+    </div>
+</div>
+
+<script>
+let peer = null, connToMonitor = null;
+let currentRace = null, myChips = 1000;
+let tempBets = {}, confirmedBets = {};
+let finalRoomName = "";
+
+window.onload = () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room');
+    
+    if(roomParam) {
+        document.getElementById('roomName').value = roomParam;
+        connectToMonitor();
+    } else {
+        document.getElementById('status-msg').innerText = "合言葉を入力してください";
+        document.getElementById('manual-form').classList.remove('hidden');
+    }
+};
+
+// サーバー（モニター）へファーストタッチ（マッチング）を試みる
+function connectToMonitor() {
+    finalRoomName = document.getElementById('roomName').value.trim();
+    if(!finalRoomName) return alert("合言葉が必要です");
+    
+    document.getElementById('manual-form').classList.add('hidden');
+    document.getElementById('status-msg').innerText = "サーバーを探しています...";
+
+    const randId = Math.random().toString(36).slice(-4);
+    const pid = finalRoomName + "_tempguest_" + randId;
+    peer = new Peer(pid);
+
+    peer.on('open', () => {
+        connToMonitor = peer.connect(finalRoomName);
+        
+        connToMonitor.on('open', () => {
+            // マッチングが成功したら名前入力画面を出す
+            document.getElementById('loading-screen').classList.add('hidden');
+            document.getElementById('name-input-screen').classList.remove('hidden');
+        });
+
+        connToMonitor.on('data', d => handleData(d));
+        
+        connToMonitor.on('close', () => {
+            exitGame();
+        });
+    });
+
+    peer.on('error', (err) => {
+        console.error(err);
+        document.getElementById('status-msg').innerText = "接続に失敗しました。合言葉が正しいか、または親機が起動しているか確認してください。";
+        document.getElementById('manual-form').classList.remove('hidden');
+    });
+}
+
+// 名前を決定して、正式にゲームサーバーへ参加通知を送る
+function submitGuestName() {
+    const name = document.getElementById('guestNameInput').value.trim();
+    if(!name) return alert("名前を入力してください。");
+
+    // 親機へ正式に参加シグナルを送信
+    connToMonitor.send({type:'JOIN', name: name, isTemp: true});
+
+    // 画面を投票メインパネルに切り替え
+    document.getElementById('name-input-screen').classList.add('hidden');
+    document.getElementById('guest-screen').classList.remove('hidden');
+    document.getElementById('display-name').innerText = name;
+}
+
+function handleData(d) {
+    if(d.type === 'RACE_SET') {
+        currentRace = d.race;
+        tempBets = {}; confirmedBets = {};
+        document.getElementById('result-screen').style.display = 'none';
+        renderGuestBetting();
+    }
+    if(d.type === 'UPDATE_STATE') {
+        if(currentRace) currentRace.horses = d.horses;
+        if(d.balances[peer.id]) { 
+            myChips = d.balances[peer.id].chips; 
+            document.getElementById('my-chips').innerText = myChips;
+            if(currentRace) {
+                currentRace.horses.forEach((h,i) => { 
+                    const el=document.getElementById(`g-odd-${i}`); 
+                    if(el) el.innerText='x'+h.currentOdds.toFixed(2); 
+                });
+            }
+        }
+    }
+    if(d.type === 'RESULT_PACK') {
+        const screen = document.getElementById('result-screen'); 
+        screen.style.display = 'flex';
+        document.getElementById('res-winner').innerText = d.winner;
+        document.getElementById('res-payout-list').innerHTML = d.payouts.map(p => `<div>${p.name}: <span style="color:var(--accent)">+${p.win}</span></div>`).join('');
+    }
+    // 運営がリザルト画面を閉じたか、最終ランキングを出したら即時離脱
+    if(d.type === 'CLOSE_UI' || d.type === 'SHOW_RANKING') {
+        exitGame();
+    }
+}
+
+function exitGame() {
+    if(peer) peer.destroy();
+    document.getElementById('result-screen').style.display = 'none';
+    document.getElementById('guest-screen').classList.add('hidden');
+    document.getElementById('exit-screen').classList.remove('hidden');
+    setTimeout(() => { window.close(); }, 2000);
+}
+
+function changeBet(i, a) { if(myChips >= a) { myChips -= a; tempBets[i] = (tempBets[i]||0) + a; document.getElementById('my-chips').innerText = myChips; updateBetRow(i); } }
+function cancelBet(i) { myChips += (tempBets[i] || 0); tempBets[i] = 0; document.getElementById('my-chips').innerText = myChips; updateBetRow(i); }
+function confirmBet(i) {
+    const a = tempBets[i]||0; if(a <= 0) return;
+    confirmedBets[i] = (confirmedBets[i]||0) + a;
+    connToMonitor.send({ type: 'BET', idx: i, amount: a });
+    tempBets[i] = 0; updateBetRow(i);
+}
+function updateBetRow(i) { document.getElementById(`g-status-${i}`).innerText = `確定:${confirmedBets[i]||0} / 準備:${tempBets[i]||0}`; }
+
+function renderGuestBetting() {
+    if(!currentRace) return;
+    document.getElementById('betting-area').innerHTML = currentRace.horses.map((h, i) => `
+        <div class="board" style="padding:15px; margin-bottom:10px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px;"><b>${h.name}</b> <span id="g-odd-${i}" style="color:var(--gold)">x${h.currentOdds.toFixed(2)}</span></div>
+            <div id="g-status-${i}" style="font-size:12px; color:#aaa; margin-bottom:10px;">確定:0 / 準備:0</div>
+            <div style="display:flex; gap:5px;">
+                <button class="mini-btn" style="background:#444; flex:1;" onclick="changeBet(${i},10)">+10</button>
+                <button class="mini-btn" style="background:#444; flex:1;" onclick="changeBet(${i},100)">+100</button>
+                <button class="mini-btn" style="background:var(--red); flex:1;" onclick="cancelBet(${i})">取消</button>
+                <button class="mini-btn" style="background:var(--accent); color:#000; flex:1.5;" onclick="confirmBet(${i})">確定</button>
+            </div>
+        </div>`).join('');
+}
+</script>
+</body>
+</html>
