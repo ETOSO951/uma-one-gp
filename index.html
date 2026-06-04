@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>UMA1 GP</title>
+    <title>UMA1 GP - Guest Fixed Edition</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         :root { 
@@ -38,6 +38,9 @@
         input { width: 100%; padding: 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid #444; margin: 5px 0; background: #111; color: #fff; text-align: center; font-size: 16px; }
         #result-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.98); z-index: 10000; display: none; flex-direction: column; align-items: center; justify-content: center; }
         
+        /* カウントダウン表示用のスタイル設定 */
+        #countdown-overlay { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 150px; font-weight: bold; color: var(--gold); z-index: 10001; display: none; pointer-events: none; text-shadow: 0 0 30px rgba(0,0,0,0.8); }
+
         @keyframes pulse {
             0% { opacity: 0.8; }
             50% { opacity: 1; transform: scale(1.05); }
@@ -46,6 +49,8 @@
     </style>
 </head>
 <body>
+
+<div id="countdown-overlay">10</div>
 
 <div id="result-screen">
     <div id="res-race-part" style="text-align: center;">
@@ -94,7 +99,8 @@ let peer = null, connToMonitor = null;
 let currentRace = null, myChips = 1000;
 let tempBets = {}, confirmedBets = {};
 let finalRoomName = "";
-let isThanksgivingMode = false; // 感謝祭状態を保持するフラグ
+let isThanksgivingMode = false; 
+let raceStatus = 'idle'; // レース状態管理用の変数 ('idle', 'betting', 'playing')
 
 window.onload = () => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -159,22 +165,42 @@ function handleData(d) {
         toggleThanksgivingVisual(d.enabled);
     }
 
+    // 上映開始シグナルの受信 (賭け防止のトリガー)
+    if (d.type === 'RACE_START_SIGNAL') {
+        raceStatus = d.status;
+        if(raceStatus === 'playing') {
+            renderGuestPlayingUI();
+        }
+    }
+
+    // カウントダウン同期信号の受信
+    if(d.type === 'COUNT_SYNC') {
+        startGuestCountdown(d.t);
+    }
+
     if(d.type === 'RACE_SET') {
         currentRace = d.race;
-        // 親機がレースデータを送る際にtgModeを忍ばせていた場合のセーフティ
+        raceStatus = 'betting'; // 投票受付中にリセット
+        
         if (d.tgMode !== undefined) {
             toggleThanksgivingVisual(d.tgMode);
         }
         tempBets = {}; confirmedBets = {};
         document.getElementById('result-screen').style.display = 'none';
-        renderGuestBetting();
+        
+        if(d.isActive && currentRace) {
+            renderGuestBetting();
+        } else {
+            document.getElementById('betting-area').innerHTML = '（レース抽選待ちです...）';
+        }
     }
+
     if(d.type === 'UPDATE_STATE') {
         if(currentRace) currentRace.horses = d.horses;
         if(d.balances[peer.id]) { 
             myChips = d.balances[peer.id].chips; 
             document.getElementById('my-chips').innerText = myChips;
-            if(currentRace) {
+            if(currentRace && raceStatus === 'betting') {
                 currentRace.horses.forEach((h,i) => { 
                     const el=document.getElementById(`g-odd-${i}`); 
                     if(el) el.innerText='x'+h.currentOdds.toFixed(2); 
@@ -182,15 +208,63 @@ function handleData(d) {
             }
         }
     }
+
     if(d.type === 'RESULT_PACK') {
+        raceStatus = 'idle';
         const screen = document.getElementById('result-screen'); 
         screen.style.display = 'flex';
         document.getElementById('res-winner').innerText = d.winner;
         document.getElementById('res-payout-list').innerHTML = d.payouts.map(p => `<div>${p.name}: <span style="color:var(--accent)">+${p.win}</span></div>`).join('');
     }
-    if(d.type === 'CLOSE_UI' || d.type === 'SHOW_RANKING') {
+
+    if(d.type === 'CLOSE_UI') {
+        document.getElementById('result-screen').style.display = 'none';
+        document.getElementById('betting-area').innerHTML = '（次のレースを抽選中です...）';
+    }
+
+    if(d.type === 'RESET_STATE') {
+        // 親機が最初からやり直すを押した時の初期化処理
+        raceStatus = 'idle';
+        myChips = 1000;
+        document.getElementById('result-screen').style.display = 'none';
+        document.getElementById('guestNameInput').value = "";
+        document.getElementById('betting-area').innerHTML = '（レース抽選待ちです...）';
+        document.getElementById('guest-screen').classList.add('hidden');
+        document.getElementById('name-input-screen').classList.remove('hidden');
+    }
+
+    if(d.type === 'SHOW_RANKING') {
         exitGame();
     }
+}
+
+// ゲスト用カウントダウン同期関数
+function startGuestCountdown(targetTime) {
+    const o = document.getElementById('countdown-overlay'); 
+    o.style.display = 'block';
+    const timer = setInterval(() => {
+        const rem = Math.ceil((targetTime - Date.now()) / 1000);
+        if(rem <= 0) { 
+            clearInterval(timer); 
+            o.style.display = 'none'; 
+        }
+        else o.innerText = rem;
+    }, 100);
+}
+
+// 上映中の画面ロックUI生成関数 (賭け防止用)
+function renderGuestPlayingUI() {
+    const bettingArea = document.getElementById('betting-area');
+    if (!bettingArea) return;
+    bettingArea.innerHTML = `
+        <div class="board" style="text-align: center; padding: 40px 20px; border-color: var(--red); background: rgba(255, 71, 87, 0.05); margin:0;">
+            <div style="font-size: 4em; margin-bottom: 10px;">🏇</div>
+            <h2 style="color: var(--red); margin: 0 0 15px 0; font-size: 24px; letter-spacing: 2px;">レース上映中</h2>
+            <p style="color: #fff; font-size: 16px; margin: 0; font-weight: bold; animation: pulse 1.5s infinite;">
+                モニターをご覧ください
+            </p>
+        </div>
+    `;
 }
 
 // 感謝祭モードの見た目を切り替える関数
@@ -211,14 +285,25 @@ function exitGame() {
     setTimeout(() => { window.close(); }, 2000);
 }
 
-function changeBet(i, a) { if(myChips >= a) { myChips -= a; tempBets[i] = (tempBets[i]||0) + a; document.getElementById('my-chips').innerText = myChips; updateBetRow(i); } }
-function cancelBet(i) { myChips += (tempBets[i] || 0); tempBets[i] = 0; document.getElementById('my-chips').innerText = myChips; updateBetRow(i); }
+// 賭け防止制限を付与した各ボタンアクション
+function changeBet(i, a) { 
+    if (raceStatus !== 'betting') return; // 受付中以外は操作無効
+    if(myChips >= a) { myChips -= a; tempBets[i] = (tempBets[i]||0) + a; document.getElementById('my-chips').innerText = myChips; updateBetRow(i); } 
+}
+
+function cancelBet(i) { 
+    if (raceStatus !== 'betting') return; // 受付中以外は操作無効
+    myChips += (tempBets[i] || 0); tempBets[i] = 0; document.getElementById('my-chips').innerText = myChips; updateBetRow(i); 
+}
+
 function confirmBet(i) {
+    if (raceStatus !== 'betting') return; // 受付中以外は操作無効
     const a = tempBets[i]||0; if(a <= 0) return;
     confirmedBets[i] = (confirmedBets[i]||0) + a;
     connToMonitor.send({ type: 'BET', idx: i, amount: a });
     tempBets[i] = 0; updateBetRow(i);
 }
+
 function updateBetRow(i) { document.getElementById(`g-status-${i}`).innerText = `確定:${confirmedBets[i]||0} / 準備:${tempBets[i]||0}`; }
 
 function renderGuestBetting() {
